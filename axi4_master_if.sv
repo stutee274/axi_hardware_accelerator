@@ -350,7 +350,8 @@
 
 
 `timescale 1ns / 1ps
-`define SIMULATION
+// NOTE: Do NOT define SIMULATION here — pass it via simulator settings only
+// `define SIMULATION
 
 module axi4_master_if #(
     parameter integer DATA_WIDTH    = 64,

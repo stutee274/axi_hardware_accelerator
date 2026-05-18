@@ -265,7 +265,8 @@ module token_decompressor #(
     logic                  fifo_wr_en;
 
     // Dictionary History Storage
-    logic [DATA_WIDTH-1:0] history_ram [0:1023];
+    // BRAM attribute: forces Vivado to use Block RAM instead of 65,536 flip-flops
+    (* ram_style = "block" *) logic [DATA_WIDTH-1:0] history_ram [0:1023];
     logic [9:0]            history_wr_ptr;
 
     // FSM States
@@ -394,12 +395,13 @@ module token_decompressor #(
     end
 
     // --- 4. HISTORY BUFFER MEMORY WRITE CONTROLLER ---
+    // NOTE: history_ram is NOT reset — Block RAM contents are undefined after
+    // reset by design. The history_wr_ptr reset ensures we start writing at
+    // position 0. Old stale data is harmless because we only read positions
+    // we have previously written to.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             history_wr_ptr <= '0;
-            for (int i = 0; i < 1024; i = i + 1) begin // Standardized inline loop index variable
-                history_ram[i] <= '0;
-            end
         end else begin
             // Save Valid Literals to Dictionary
             if (current_state == PARSE_TOKEN && !fifo_empty && !is_match_token && (active_token != '0)) begin
