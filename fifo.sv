@@ -157,26 +157,16 @@ assign rd_data = mem_data[rd_ptr];
 assign rd_strb = mem_strb[rd_ptr];
 assign rd_last = mem_last[rd_ptr];
 
-// Pointer control and memory write
+// Pointer control
 always_ff @(posedge clk or negedge rst_n) begin : ptr_block
-    integer idx;
     if (!rst_n) begin
         wr_ptr       <= '0;
         rd_ptr       <= '0;
         overflow_err <= 1'b0;
-        for (idx = 0; idx < DEPTH; idx = idx + 1) begin
-            mem_data[idx] <= '0;
-            mem_strb[idx] <= '0;
-            mem_last[idx] <= 1'b0;
-        end
     end else begin
         overflow_err <= 1'b0;
 
         if (wr_valid && wr_ready) begin
-            mem_data[wr_ptr] <= wr_data;
-            mem_strb[wr_ptr] <= wr_strb;
-            mem_last[wr_ptr] <= wr_last;
-            
             // FIX: Dynamic wrapping logic to protect non-power-of-2 depth allocations
             if (wr_ptr == DEPTH-1) wr_ptr <= '0;
             else                   wr_ptr <= wr_ptr + 1;
@@ -190,6 +180,15 @@ always_ff @(posedge clk or negedge rst_n) begin : ptr_block
             if (rd_ptr == DEPTH-1) rd_ptr <= '0;
             else                   rd_ptr <= rd_ptr + 1;
         end
+    end
+end
+
+// STRICTLY SYNCHRONOUS RAM WRITE - Enables Distributed/Block RAM inference
+always_ff @(posedge clk) begin : ram_write_block
+    if (wr_valid && wr_ready) begin
+        mem_data[wr_ptr] <= wr_data;
+        mem_strb[wr_ptr] <= wr_strb;
+        mem_last[wr_ptr] <= wr_last;
     end
 end
 

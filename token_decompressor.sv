@@ -314,16 +314,22 @@ module token_decompressor #(
                 default: fifo_count <= fifo_count; // Unchanged for 2'b00 and simultaneous 2'b11
             endcase
 
-            // Write Side
+            // Write Side (Pointer logic only)
             if (fifo_wr_en) begin
-                fifo_mem[fifo_wr_ptr] <= in_token;
-                fifo_wr_ptr           <= fifo_wr_ptr + 1;
+                fifo_wr_ptr <= fifo_wr_ptr + 1;
             end
             
             // Read Side
             if (fifo_rd_en) begin
                 fifo_rd_ptr <= fifo_rd_ptr + 1;
             end
+        end
+    end
+
+    // STRICTLY SYNCHRONOUS RAM WRITE (No Async Reset) - Enables Distributed RAM inference
+    always_ff @(posedge clk) begin
+        if (fifo_wr_en) begin
+            fifo_mem[fifo_wr_ptr] <= in_token;
         end
     end
 
@@ -346,11 +352,14 @@ module token_decompressor #(
     end
 
     // --- 3. COMBINATIONAL NEXT STATE & OUTPUT DECODING ---
+    logic                  out_valid_c;
+    logic [DATA_WIDTH-1:0] out_data_c;
+
     always_comb begin
         next_state = current_state;
         fifo_rd_en = 1'b0;
-        out_valid  = 1'b0;
-        out_data   = '0;
+        out_valid_c  = 1'b0;
+        out_data_c   = '0;
 
         case (current_state)
             IDLE: begin
@@ -370,8 +379,8 @@ module token_decompressor #(
                     end 
                     // 3. Handle Literal Pass-Through
                     else begin
-                        out_data   = active_token;
-                        out_valid  = 1'b1;
+                        out_data_c   = active_token;
+                        out_valid_c  = 1'b1;
                         fifo_rd_en = 1'b1;
                         next_state = fifo_empty ? IDLE : PARSE_TOKEN; // Stream continuous data
                     end
@@ -380,9 +389,9 @@ module token_decompressor #(
 
             DECOMPRESS_MATCH: begin
                 if (len_counter > 0) begin
-                    out_valid  = 1'b1;
+                    out_valid_c  = 1'b1;
                     // Asynchronous lookback read from distributed history array
-                    out_data   = history_ram[history_wr_ptr - saved_offset];
+                    out_data_c   = history_ram[history_wr_ptr - saved_offset];
                     next_state = DECOMPRESS_MATCH;
                 end else begin
                     fifo_rd_en = 1'b1; // Consume the match token now that expansion finished
@@ -395,24 +404,42 @@ module token_decompressor #(
     end
 
     // --- 4. HISTORY BUFFER MEMORY WRITE CONTROLLER ---
-    // NOTE: history_ram is NOT reset — Block RAM contents are undefined after
-    // reset by design. The history_wr_ptr reset ensures we start writing at
-    // position 0. Old stale data is harmless because we only read positions
-    // we have previously written to.
+    // Pointer logic with async reset
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             history_wr_ptr <= '0;
         end else begin
-            // Save Valid Literals to Dictionary
+            // Pointer increment for Valid Literals
             if (current_state == PARSE_TOKEN && !fifo_empty && !is_match_token && (active_token != '0)) begin
-                history_ram[history_wr_ptr] <= active_token;
-                history_wr_ptr              <= history_wr_ptr + 1;
+                history_wr_ptr <= history_wr_ptr + 1;
             end
-            // Save Reconstructed Match Data Blocks back to Dictionary (Handles Overlaps)
-            else if (current_state == DECOMPRESS_MATCH && out_valid) begin
-                history_ram[history_wr_ptr] <= out_data;
-                history_wr_ptr              <= history_wr_ptr + 1;
+            // Pointer increment for Reconstructed Match Data (Handles Overlaps)
+            else if (current_state == DECOMPRESS_MATCH && out_valid_c) begin
+                history_wr_ptr <= history_wr_ptr + 1;
             end
+        end
+    end
+
+    // STRICTLY SYNCHRONOUS RAM WRITE (No Async Reset) - Enables Block RAM inference
+    always_ff @(posedge clk) begin
+        if (current_state == PARSE_TOKEN && !fifo_empty && !is_match_token && (active_token != '0)) begin
+            history_ram[history_wr_ptr] <= active_token;
+        end
+        else if (current_state == DECOMPRESS_MATCH && out_valid_c) begin
+            history_ram[history_wr_ptr] <= out_data_c;
+        end
+    end
+
+    // --- 5. SYNCHRONOUS OUTPUT PIPELINE STAGE ---
+    // Registering the combinational outputs breaks the massive combinational
+    // delay path and allows Vivado to infer true Block RAM.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            out_valid <= 1'b0;
+            out_data  <= '0;
+        end else begin
+            out_valid <= out_valid_c;
+            out_data  <= out_data_c;
         end
     end
 
